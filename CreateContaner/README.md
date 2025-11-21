@@ -1,9 +1,4 @@
-```markdown
 # 🐧 Proxmox LXC Container Auto-Creator
-
-![Version](https://img.shields.io/badge/version-2.0-blue)
-![License](https://img.shields.io/badge/license-GPLv3-green)
-![Proxmox](https://img.shields.io/badge/Proxmox-VE_9-orange)
 
 ## 👋 Приветствие
 
