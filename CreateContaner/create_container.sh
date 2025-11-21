@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # === Конфигурация по умолчанию ===
-TEMPLATE_FILE="/var/lib/vz/template/cache/debian-13-standard_13.1-2_amd64.tar.zst"
+DEFAULT_TEMPLATE_DIR="/var/lib/vz/template/cache"
+DEFAULT_TEMPLATE="debian-13-standard_13.1-2_amd64.tar.zst"
+TEMPLATE_FILE="$DEFAULT_TEMPLATE_DIR/$DEFAULT_TEMPLATE"
 TARGET_NODE="pve"
 STORAGE="local"
 DEFAULT_VCPU=2
@@ -9,6 +11,45 @@ DEFAULT_RAM_GB=4
 DEFAULT_DISK_GB=8
 DEFAULT_BRIDGE="vmbr1"
 DEFAULT_INSTALL_VNC="n"
+
+# === Функция выбора шаблона ===
+select_template() {
+    echo "📁 Проверяем доступные шаблоны в: $DEFAULT_TEMPLATE_DIR"
+    
+    # Получаем список доступных шаблонов
+    local templates=()
+    while IFS= read -r -d $'\0' file; do
+        templates+=("$(basename "$file")")
+    done < <(find "$DEFAULT_TEMPLATE_DIR" -maxdepth 1 -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.tar.xz" \) -print0 2>/dev/null)
+    
+    if [[ ${#templates[@]} -eq 0 ]]; then
+        echo "❌ Ошибка: В папке $DEFAULT_TEMPLATE_DIR не найдено шаблонов контейнеров"
+        echo "💡 Доступные форматы: .tar.zst, .tar.gz, .tar.xz"
+        exit 1
+    fi
+    
+    echo "📋 Доступные шаблоны:"
+    echo "┌─────────────────────────────────────────────────────"
+    for i in "${!templates[@]}"; do
+        printf "│ %2d. %s\n" $((i+1)) "${templates[i]}"
+    done
+    echo "└─────────────────────────────────────────────────────"
+    
+    # Запрос выбора шаблона
+    while true; do
+        read -p "💬 Выберите шаблон (1-${#templates[@]}) [1]: " choice
+        choice=${choice:-1}
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#templates[@]}" ]; then
+            SELECTED_TEMPLATE="${templates[$((choice-1))]}"
+            TEMPLATE_FILE="$DEFAULT_TEMPLATE_DIR/$SELECTED_TEMPLATE"
+            echo "✅ Выбран шаблон: $SELECTED_TEMPLATE"
+            break
+        else
+            echo "❌ Ошибка: Введите число от 1 до ${#templates[@]}"
+        fi
+    done
+}
 
 # === Функция генерации случайного пароля ===
 generate_password() {
@@ -22,9 +63,9 @@ generate_password() {
 check_template_file() {
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
         echo "❌ Ошибка: Файл шаблона не найден: $TEMPLATE_FILE"
-        echo "📁 Доступные шаблоны в /var/lib/vz/template/cache/:"
-        find /var/lib/vz/template/cache/ -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.tar.xz" 2>/dev/null | while read -r file; do
-            echo "  📄 - $(basename "$file")"
+        echo "📁 Доступные шаблоны в $DEFAULT_TEMPLATE_DIR:"
+        find "$DEFAULT_TEMPLATE_DIR" -maxdepth 1 -type f \( -name "*.tar.zst" -o -name "*.tar.gz" -o -name "*.tar.xz" \) -exec basename {} \; 2>/dev/null | while read -r file; do
+            echo "  📄 - $file"
         done
         exit 1
     fi
@@ -155,7 +196,7 @@ use_defaults() {
     echo "🚀 Режим использования значений по умолчанию ==="
     echo
     
-    # Проверяем наличие шаблона
+    # Проверяем наличие шаблона по умолчанию
     check_template_file
     echo
     
@@ -215,8 +256,8 @@ interactive_input() {
     echo "🐧 Создание нового контейнера в Proxmox ==="
     echo
 
-    # Проверяем наличие шаблона
-    check_template_file
+    # Выбор шаблона
+    select_template
     echo
 
     # Запрос имени контейнера (будет использоваться как hostname)
@@ -418,6 +459,7 @@ main() {
         echo "💿 Диск: ${DISK_SIZE}GB"
         echo "🌐 Сеть: $BRIDGE"
         echo "📡 IP-адрес: DHCP"
+        echo "📦 Шаблон: $(basename "$TEMPLATE_FILE")"
         if [[ -n "$ROOT_PASSWORD" ]]; then
             if [[ "$PASSWORD_CHOICE" == "1" ]] || [[ "$1" == "--defaults" ]]; then
                 echo "🔐 Пароль root: $ROOT_PASSWORD"
@@ -425,7 +467,6 @@ main() {
                 echo "🔐 Пароль root: установлен вручную"
             fi
         fi
-        echo "📦 Шаблон: $(basename "$TEMPLATE_FILE")"
         echo
         echo "🔧 Для подключения: pct enter $NEW_CTID"
         echo "📊 Для просмотра статуса: pct status $NEW_CTID"
