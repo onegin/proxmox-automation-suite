@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ======================================================================
-# 🐧 Debian Basic-Setting script
+# 🐧 Debian Basic-Setting script - Contaner LXC
 # ======================================================================
 # 
 # 👨‍💻 Автор: Антонов Евгений
@@ -18,37 +18,59 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+#Создание файла log
+touch /var/log/post_install.log
+
+
 # Обновление списка пакетов
 echo "Обновление списка пакетов..."
-apt update
+apt update >> /var/log/post_install.log
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Обновление установленных пакетов
 echo "Обновление системы..."
-apt upgrade -y
+apt upgrade -y >> /var/log/post_install.log
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Установка пакетов (добавлены locales, rsyslog, net-tools, tzdata, logrotate, screen)
 echo "Установка дополнительных пакетов..."
-apt install -y vim git wget curl mc zip openssh-server htop iftop sudo zabbix-agent locales rsyslog net-tools tzdata logrotate screen
+apt install -y vim git wget curl mc zip openssh-server htop iftop sudo zabbix-agent locales rsyslog net-tools tzdata logrotate screen >> /var/log/post_install.log
+
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Настройка локали
 echo "Настройка локали..."
 sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen
 locale-gen
-update-locale LANG=en_US.UTF-8
+update-locale LANG=en_US.UTF-8 >> /var/log/post_install.log
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Настройка часового пояса
 echo "Настройка часового пояса..."
-dpkg-reconfigure -f noninteractive tzdata
+dpkg-reconfigure -f noninteractive tzdata >> /var/log/post_install.log
+
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Настройка SSH - разрешение подключения root
 echo "Настройка SSH..."
 sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-systemctl restart ssh
+systemctl restart ssh >> /var/log/post_install.log
+
+echo "------------------------" >> /var/log/post_install.log
 
 # Перезапуск служб
 echo "Перезапуск системных служб..."
-systemctl restart rsyslog
+systemctl restart rsyslog >> /var/log/post_install.log
 
+
+echo "------------------------" >> /var/log/post_install.log
+echo "Настройка завершена" >> /var/log/post_install.log
+echo "------------------------" >> /var/log/post_install.log
 echo "=================================================="
 echo "Настройка завершена!"
 echo "Root доступ по SSH разрешен"
