@@ -24,64 +24,68 @@ else
     exit 1
 fi
 
+# === Установка значений по умолчанию ===
+TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-"n"}
+CTID_MIN=${CTID_MIN:-100}
+CTID_MAX=${CTID_MAX:-999}
+EXTERNAL_SCRIPT_URL=${EXTERNAL_SCRIPT_URL:-""}
+
 # === Проверка обязательных параметров ===
 if [[ -z "$DEFAULT_TEMPLATE_DIR" || -z "$STORAGE" || -z "$DEFAULT_BRIDGE" ]]; then
     echo "❌ В конфигурации отсутствуют обязательные параметры"
     exit 1
 fi
 
-# === Функция получения IP-адреса контейнера ===
+# === Функции ===
+
+# Получение IP-адреса контейнера
 get_container_ip() {
     local ctid=$1
     for attempt in {1..10}; do
         local ip=$(pct exec $ctid -- ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d'/' -f1)
-        [[ -n "$ip" && "$ip" != "127.0.0.1" ]] && echo "$ip" && return 0
+        if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
+            echo "$ip"
+            return 0
+        fi
         sleep 3
     done
     echo "unknown"
 }
 
-# === Функция отправки уведомления в Telegram ===
+# Отправка уведомления в Telegram
 send_telegram_message() {
-    [[ "$TELEGRAM_ENABLED" != "y" ]] && return 0
-    [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]] && return 1
+    if [[ "$TELEGRAM_ENABLED" != "y" ]]; then
+        return 0
+    fi
     
-    local escaped_message=$(echo "$1" | sed 's/"/\\"/g' | sed 's/\\n/\\\\n/g')
-    curl -s -X POST -H "Content-Type: application/json" \
+    if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+        echo "❌ Не указаны токен или chat_id для Telegram"
+        return 1
+    fi
+    
+    local message="$1"
+    local escaped_message=$(echo "$message" | sed 's/"/\\"/g' | sed 's/\\n/\\\\n/g')
+    
+    if curl -s -X POST -H "Content-Type: application/json" \
         -d "{\"chat_id\":\"$TELEGRAM_CHAT_ID\",\"text\":\"$escaped_message\",\"parse_mode\":\"Markdown\"}" \
-        "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null && echo "✅ Уведомление отправлено в Telegram"
+        "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" > /dev/null; then
+        echo "✅ Уведомление отправлено в Telegram"
+        return 0
+    else
+        echo "❌ Ошибка отправки в Telegram"
+        return 1
+    fi
 }
 
-# === Функция генерации отчета для Telegram ===
-generate_telegram_report() {
-    local report="🎉 *Новый контейнер создан!* 🎉
-
-*Основная информация:*
-🆔 CTID: \`$1\`
-🏷️ Имя: \`$2\`
-🌐 IP-адрес: \`${10}\`
-⚡ vCPU: \`$3\`
-💾 RAM: \`${4}GB\`
-💿 Диск: \`${5}GB\`
-🔌 Сеть: \`$6\`
-📦 Шаблон: \`$7\`
-
-*Дополнительные настройки:*
-🖥️ VNC: \`$9\`"
-
-    [[ -n "$8" && "$PASSWORD_CHOICE" == "1" ]] && report="$report\n🔐 Пароль root: \`$8\`"
-    [[ -n "$8" && "$PASSWORD_CHOICE" != "1" ]] && report="$report\n🔐 Пароль root: установлен вручную"
-
-    report="$report
-
-*Системная информация:*
-🖥️ Узел: \`$(hostname)\`
-🕐 Создан: $(date '+%Y-%m-%d %H:%M:%S')"
-
-    echo -e "$report"
+# Генерация случайного пароля
+generate_password() {
+    local length=12
+    local chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*'
+    local password=$(head /dev/urandom | tr -dc "$chars" | head -c $length)
+    echo "$password"
 }
 
-# === Функция выбора шаблона ===
+# Выбор шаблона
 select_template() {
     echo "📁 Проверяем доступные шаблоны в: $DEFAULT_TEMPLATE_DIR"
     
@@ -96,16 +100,12 @@ select_template() {
     fi
     
     echo "📋 Доступные шаблоны:"
-    echo "┌─────────────────────────────────────────────────────"
     for i in "${!templates[@]}"; do
-        printf "│ %2d. %s\n" $((i+1)) "${templates[i]}"
+        printf "%2d. %s\n" $((i+1)) "${templates[i]}"
     done
-    echo "└─────────────────────────────────────────────────────"
     
     while true; do
-        read -p "💬 Выберите шаблон (1-${#templates[@]}) [1]: " choice
-        choice=${choice:-1}
-        
+        read -p "💬 Выберите шаблон (1-${#templates[@]}): " choice
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#templates[@]}" ]; then
             SELECTED_TEMPLATE="${templates[$((choice-1))]}"
             TEMPLATE_FILE="$DEFAULT_TEMPLATE_DIR/$SELECTED_TEMPLATE"
@@ -117,114 +117,71 @@ select_template() {
     done
 }
 
-# === Функция генерации случайного пароля ===
-generate_password() {
-    local length=8
-    local chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    local password=$(head /dev/urandom | tr -dc "$chars" | head -c $length)
-    echo "$password"
-}
-
-# === Проверка наличия шаблона ===
-check_template_file() {
-    if [[ ! -f "$TEMPLATE_FILE" ]]; then
-        echo "❌ Файл шаблона не найден: $TEMPLATE_FILE"
-        exit 1
-    fi
-    echo "📦 Используется шаблон: $(basename "$TEMPLATE_FILE")"
-}
-
-# === Функция для получения доступных ресурсов ===
+# Получение доступных сетевых мостов
 get_available_bridges() {
     echo "🌐 Доступные сетевые мосты:"
     for bridge in /sys/class/net/vmbr*; do
         if [[ -d "$bridge" ]]; then
             bridge_name=$(basename "$bridge")
-            bridge_alias=$(grep -A 10 "iface $bridge_name" /etc/network/interfaces 2>/dev/null | grep -oP 'alias\s+\K.*' | head -1)
-            if [[ -n "$bridge_alias" ]]; then
-                echo "  🔌 - $bridge_name (alias: $bridge_alias)"
-            else
-                echo "  🔌 - $bridge_name"
-            fi
+            echo "  - $bridge_name"
         fi
     done
 }
 
-get_available_cores() {
-    local total_cores=$(nproc)
-    echo "⚡ Доступно CPU ядер: $total_cores"
-    return $total_cores
-}
-
-get_available_memory() {
-    local total_mem=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    local total_mem_gb=$((total_mem / 1024 / 1024))
-    echo "💾 Доступно RAM: ${total_mem_gb}GB"
-    return $total_mem_gb
-}
-
-# === Функция поиска свободного CTID ===
+# Поиск свободного CTID
 find_available_ctid() {
     for id in $(seq $CTID_MIN $CTID_MAX); do
         if ! pct list 2>/dev/null | awk '{print $1}' | grep -q "^$id$"; then
             echo $id
             return 0
         fi
-        echo "🔄 CTID $id занят, проверяем следующий..." >&2
     done
     echo "❌ Не удалось найти свободный CTID в диапазоне $CTID_MIN-$CTID_MAX" >&2
     return 1
 }
 
-# === Функция для настройки пароля root ===
+# Настройка пароля root
 setup_root_password() {
-    local mode=$1
-    
-    if [[ "$mode" == "defaults" ]]; then
-        ROOT_PASSWORD=$(generate_password)
-        echo "🔐 Сгенерирован пароль root: $ROOT_PASSWORD"
-        return 0
-    fi
-    
-    echo
-    echo "🔐 Настройка пароля root ==="
+    echo ""
+    echo "🔐 Настройка пароля root:"
     echo "1. Сгенерировать случайный пароль"
     echo "2. Ввести пароль вручную"
-    read -p "💬 Выберите вариант [1]: " PASSWORD_CHOICE
-    PASSWORD_CHOICE=${PASSWORD_CHOICE:-1}
     
-    case $PASSWORD_CHOICE in
-        1)
-            ROOT_PASSWORD=$(generate_password)
-            echo "🔐 Сгенерирован пароль root: $ROOT_PASSWORD"
-            ;;
-        2)
-            while true; do
-                read -s -p "🔒 Введите пароль для root (минимум 8 символов): " PASSWORD1
-                echo
-                read -s -p "🔒 Повторите пароль: " PASSWORD2
-                echo
-                
-                if [[ "$PASSWORD1" != "$PASSWORD2" ]]; then
-                    echo "❌ Пароли не совпадают. Попробуйте снова."
-                elif [[ ${#PASSWORD1} -lt 8 ]]; then
-                    echo "❌ Пароль должен содержать минимум 8 символов."
-                else
-                    ROOT_PASSWORD="$PASSWORD1"
-                    echo "✅ Пароль установлен."
-                    break
-                fi
-            done
-            ;;
-        *)
-            echo "⚠️ Будет сгенерирован случайный пароль."
-            ROOT_PASSWORD=$(generate_password)
-            echo "🔐 Сгенерирован пароль root: $ROOT_PASSWORD"
-            ;;
-    esac
+    while true; do
+        read -p "💬 Выберите вариант (1/2): " choice
+        case $choice in
+            1)
+                ROOT_PASSWORD=$(generate_password)
+                echo "✅ Сгенерирован пароль root: $ROOT_PASSWORD"
+                break
+                ;;
+            2)
+                while true; do
+                    read -s -p "🔒 Введите пароль для root (минимум 8 символов): " PASSWORD1
+                    echo
+                    read -s -p "🔒 Повторите пароль: " PASSWORD2
+                    echo
+                    
+                    if [[ "$PASSWORD1" != "$PASSWORD2" ]]; then
+                        echo "❌ Пароли не совпадают. Попробуйте снова."
+                    elif [[ ${#PASSWORD1} -lt 8 ]]; then
+                        echo "❌ Пароль должен содержать минимум 8 символов."
+                    else
+                        ROOT_PASSWORD="$PASSWORD1"
+                        echo "✅ Пароль установлен."
+                        break
+                    fi
+                done
+                break
+                ;;
+            *)
+                echo "❌ Введите 1 или 2"
+                ;;
+        esac
+    done
 }
 
-# === Функция для установки пароля в контейнере ===
+# Установка пароля в контейнере
 set_root_password() {
     local ctid=$1
     local password=$2
@@ -232,7 +189,6 @@ set_root_password() {
     echo "🔐 Устанавливаем пароль root в контейнере..."
     
     for attempt in {1..5}; do
-        echo "🔄 Попытка $attempt установки пароля..."
         if pct exec $ctid -- bash -c "echo 'root:${password}' | chpasswd" 2>/dev/null; then
             echo "✅ Пароль root успешно установлен."
             return 0
@@ -244,180 +200,313 @@ set_root_password() {
     return 1
 }
 
-# === Функция установки VNC ===
+# Установка VNC
 install_vnc_packages() {
     local ctid=$1
     echo "📦 Устанавливаем пакеты для VNC..."
-    pct exec $ctid -- apt-get update
-    pct exec $ctid -- apt-get install -y xorg xfce4 tigervnc-standalone-server firefox-esr
-    pct exec $ctid -- bash -c 'echo -e "#!/bin/bash\nvncserver :1 -geometry 1280x800 -depth 24" > /usr/local/bin/start-vnc'
-    pct exec $ctid -- chmod +x /usr/local/bin/start-vnc
-    echo "✅ VNC пакеты установлены. Для запуска VNC выполните: start-vnc"
-}
-
-# === Функция для использования значений по умолчанию ===
-use_defaults() {
-    echo "🚀 Режим использования значений по умолчанию ==="
-    echo
     
-    TEMPLATE_FILE="$DEFAULT_TEMPLATE_DIR/$DEFAULT_TEMPLATE"
-    check_template_file
-    echo
-    
-    while true; do
-        read -p "💬 Введите имя контейнера: " CT_NAME
-        if [[ -n "$CT_NAME" && "$CT_NAME" =~ ^[a-zA-Z0-9\-]+$ ]]; then
-            break
-        else
-            echo "❌ Имя может содержать только латинские буквы, цифры и дефисы"
-        fi
-    done
-    
-    VCPU=$DEFAULT_VCPU
-    RAM_GB=$DEFAULT_RAM_GB
-    RAM_MB=$((RAM_GB * 1024))
-    DISK_SIZE=$DEFAULT_DISK_GB
-    BRIDGE=$DEFAULT_BRIDGE
-    INSTALL_VNC=$DEFAULT_INSTALL_VNC
-    NET_OPTION="name=eth0,bridge=$BRIDGE,ip=dhcp"
-    
-    setup_root_password "defaults"
-    
-    if [[ ! -d "/sys/class/net/$BRIDGE" ]]; then
-        echo "❌ Мост '$BRIDGE' не существует."
-        get_available_bridges
-        exit 1
-    fi
-    
-    echo
-    echo "📋 Параметры контейнера (по умолчанию) ==="
-    echo "📦 Шаблон: $(basename "$TEMPLATE_FILE")"
-    echo "🏷️ Имя: $CT_NAME"
-    echo "⚡ vCPU: $VCPU"
-    echo "💾 RAM: ${RAM_GB}GB"
-    echo "💿 Диск: ${DISK_SIZE}GB"
-    echo "🌐 Сеть: $BRIDGE"
-    echo "🖥️ VNC: $INSTALL_VNC"
-    echo "🔐 Пароль: $ROOT_PASSWORD"
-    [[ "$TELEGRAM_ENABLED" == "y" ]] && echo "📱 Telegram: включены"
-    echo
-}
-
-# === Функция для интерактивного ввода ===
-interactive_input() {
-    echo "🐧 Создание нового контейнера в Proxmox ==="
-    echo
-
-    select_template
-    echo
-
-    while true; do
-        read -p "💬 Введите имя контейнера: " CT_NAME
-        if [[ -n "$CT_NAME" && "$CT_NAME" =~ ^[a-zA-Z0-9\-]+$ ]]; then
-            break
-        else
-            echo "❌ Имя может содержать только латинские буквы, цифры и дефисы"
-        fi
-    done
-
-    setup_root_password "interactive"
-
-    get_available_cores
-    TOTAL_CORES=$?
-    read -p "💬 Введите количество vCPU [по умолчанию: $DEFAULT_VCPU]: " VCPU
-    VCPU=${VCPU:-$DEFAULT_VCPU}
-    [[ ! "$VCPU" =~ ^[0-9]+$ ]] || [ "$VCPU" -lt 1 ] || [ "$VCPU" -gt "$TOTAL_CORES" ] && echo "❌ Введите число от 1 до $TOTAL_CORES" && exit 1
-
-    get_available_memory
-    TOTAL_MEM_GB=$?
-    read -p "💬 Введите объем RAM в GB [по умолчанию: $DEFAULT_RAM_GB]: " RAM_GB
-    RAM_GB=${RAM_GB:-$DEFAULT_RAM_GB}
-    [[ ! "$RAM_GB" =~ ^[0-9]+$ ]] || [ "$RAM_GB" -lt 1 ] || [ "$RAM_GB" -gt "$TOTAL_MEM_GB" ] && echo "❌ Введите число от 1 до $TOTAL_MEM_GB" && exit 1
-    RAM_MB=$((RAM_GB * 1024))
-
-    read -p "💬 Введите размер диска в GB [по умолчанию: $DEFAULT_DISK_GB]: " DISK_SIZE
-    DISK_SIZE=${DISK_SIZE:-$DEFAULT_DISK_GB}
-    [[ ! "$DISK_SIZE" =~ ^[0-9]+$ ]] || [ "$DISK_SIZE" -lt 2 ] && echo "❌ Введите число не менее 2 GB" && exit 1
-
-    get_available_bridges
-    read -p "💬 Введите имя сетевого моста [по умолчанию: $DEFAULT_BRIDGE]: " BRIDGE
-    BRIDGE=${BRIDGE:-$DEFAULT_BRIDGE}
-    [[ -n "$BRIDGE" ]] && [[ ! -d "/sys/class/net/$BRIDGE" ]] && echo "❌ Мост '$BRIDGE' не существует." && exit 1
-
-    read -p "💬 Введите IP-адрес в формате CIDR или оставьте пустым для DHCP: " IP_ADDRESS
-    if [[ -n "$IP_ADDRESS" ]]; then
-        [[ ! "$IP_ADDRESS" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] && echo "❌ Неверный формат IP-адреса" && exit 1
-        read -p "💬 Введите IP-адрес шлюза: " GATEWAY
-        [[ -z "$GATEWAY" ]] && echo "❌ Шлюз не может быть пустым" && exit 1
-        NET_OPTION="name=eth0,bridge=$BRIDGE,ip=$IP_ADDRESS,gw=$GATEWAY"
+    if pct exec $ctid -- apt-get update >/dev/null 2>&1 && \
+       pct exec $ctid -- apt-get install -y xorg xfce4 tigervnc-standalone-server firefox-esr >/dev/null 2>&1; then
+        pct exec $ctid -- bash -c 'echo -e "#!/bin/bash\nvncserver :1 -geometry 1280x800 -depth 24" > /usr/local/bin/start-vnc'
+        pct exec $ctid -- chmod +x /usr/local/bin/start-vnc
+        echo "✅ VNC пакеты установлены. Для запуска VNC выполните: start-vnc"
+        return 0
     else
-        NET_OPTION="name=eth0,bridge=$BRIDGE,ip=dhcp"
+        echo "❌ Ошибка установки VNC пакетов"
+        return 1
     fi
+}
 
-    read -p "💬 Введите VLAN ID (оставьте пустым если не требуется): " VLAN_ID
-    [[ -n "$VLAN_ID" ]] && [[ "$VLAN_ID" =~ ^[0-9]+$ ]] && NET_OPTION="${NET_OPTION},tag=$VLAN_ID"
+# Запуск внешнего скрипта внутри контейнера
+run_external_script() {
+    local ctid=$1
+    
+    echo "🌐 Загружаем и запускаем внешний скрипт внутри контейнера..."
+    echo "📥 URL скрипта: $EXTERNAL_SCRIPT_URL"
+    
+    # Ожидаем полный запуск контейнера
+    echo "⏳ Ожидаем запуск контейнера..."
+    sleep 10
+    
+    # Проверяем, запущен ли контейнер
+    if ! pct status $ctid | grep -q "running"; then
+        echo "❌ Контейнер не запущен. Не могу выполнить скрипт."
+        return 1
+    fi
+    
+    # Проверяем доступность сети
+    echo "🔍 Проверяем доступность интернета в контейнере..."
+    local network_ok=false
+    for i in {1..10}; do
+        if pct exec $ctid -- ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+            network_ok=true
+            break
+        fi
+        sleep 3
+    done
+    
+    if [[ "$network_ok" != "true" ]]; then
+        echo "⚠️ Контейнер не имеет доступа в интернет. Пропускаем запуск внешнего скрипта."
+        return 1
+    fi
+    
+    echo "✅ Интернет в контейнере доступен"
+    
+    # Обновляем пакеты и устанавливаем curl
+    echo "📦 Обновляем пакеты и устанавливаем curl..."
+    if ! pct exec $ctid -- apt-get update >/dev/null 2>&1; then
+        echo "❌ Не удалось обновить список пакетов"
+        return 1
+    fi
+    
+    if ! pct exec $ctid -- which curl >/dev/null 2>&1; then
+        if ! pct exec $ctid -- apt-get install -y curl >/dev/null 2>&1; then
+            echo "❌ Не удалось установить curl. Пропускаем запуск скрипта."
+            return 1
+        fi
+    fi
+    
+    echo "✅ Curl установлен"
+    
+    # Загружаем и запускаем скрипт
+    local script_name="setup-script.sh"
+    echo "📥 Загружаем скрипт..."
+    if pct exec $ctid -- bash -c "curl -s -o /tmp/$script_name '$EXTERNAL_SCRIPT_URL' && chmod +x /tmp/$script_name"; then
+        echo "✅ Скрипт успешно загружен"
+        echo "🚀 Запускаем скрипт..."
+        if pct exec $ctid -- /tmp/$script_name; then
+            echo "✅ Внешний скрипт успешно выполнен"
+            return 0
+        else
+            echo "⚠️ Внешний скрипт завершился с ошибкой"
+            return 1
+        fi
+    else
+        echo "❌ Ошибка загрузки внешнего скрипта"
+        return 1
+    fi
+}
 
-    echo
-    echo "🖥️ Настройка VNC консоли ==="
-    read -p "💬 Установить базовые пакеты для VNC? (y/n) [n]: " INSTALL_VNC
-    INSTALL_VNC=${INSTALL_VNC:-$DEFAULT_INSTALL_VNC}
+# Генерация отчета
+generate_report() {
+    local ctid=$1
+    local name=$2
+    local vcpu=$3
+    local ram_gb=$4
+    local disk_size=$5
+    local bridge=$6
+    local template=$7
+    local password=$8
+    local vnc=$9
+    local ip=${10}
+    local script_status=${11}
+    
+    local report="
+🎉 НОВЫЙ КОНТЕЙНЕР СОЗДАН И ЗАПУЩЕН!
 
-    echo
-    echo "📋 Параметры контейнера ==="
-    echo "📦 Шаблон: $(basename "$TEMPLATE_FILE")"
-    echo "🏷️ Имя: $CT_NAME"
-    echo "⚡ vCPU: $VCPU"
-    echo "💾 RAM: ${RAM_GB}GB"
-    echo "💿 Диск: ${DISK_SIZE}GB"
-    echo "🌐 Сеть: $BRIDGE"
-    [[ -n "$IP_ADDRESS" ]] && echo "📡 IP-адрес: $IP_ADDRESS"
-    [[ -n "$VLAN_ID" ]] && echo "🏷️ VLAN: $VLAN_ID"
-    echo "🖥️ VNC: $INSTALL_VNC"
-    [[ -n "$ROOT_PASSWORD" ]] && echo "🔐 Пароль: $ROOT_PASSWORD"
-    [[ "$TELEGRAM_ENABLED" == "y" ]] && echo "📱 Telegram: включены"
-    echo
+ОСНОВНАЯ ИНФОРМАЦИЯ:
+🆔 CTID: $ctid
+🏷️ Имя: $name
+🌐 IP-адрес: $ip
+⚡ vCPU: $vcpu
+💾 RAM: ${ram_gb}GB
+💿 Диск: ${disk_size}GB
+🔌 Сеть: $bridge
+📦 Шаблон: $template
 
-    read -p "💬 Все параметры верны? (y/n): " CONFIRM
-    [[ ! "$CONFIRM" =~ ^[Yy]$ ]] && echo "❌ Создание отменено" && exit 1
+ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ:
+🖥️ VNC: $vnc
+🔧 Скрипт настройки: $script_status
+🔐 Пароль root: $password
+
+СИСТЕМНАЯ ИНФОРМАЦИЯ:
+🖥️ Узел: $(hostname)
+🕐 Создан: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    echo "$report"
 }
 
 # === Основная логика ===
-main() {
-    [[ "$1" == "--defaults" ]] && use_defaults || interactive_input
-    
-    echo "🔍 Ищем свободный CTID..."
-    NEW_CTID=$(find_available_ctid) || exit 1
-    echo "✅ Выбран CTID: $NEW_CTID"
 
-    echo "🛠️ Создаем контейнер..."
-    eval "pct create $NEW_CTID \"$TEMPLATE_FILE\" --storage \"$STORAGE\" --rootfs \"${STORAGE}:${DISK_SIZE}\" --hostname \"$CT_NAME\" --cores \"$VCPU\" --memory \"$RAM_MB\" --net0 \"$NET_OPTION\" --onboot 1 --unprivileged 0 --features nesting=1"
+echo "🐧 Proxmox LXC Container Auto-Creator"
+echo "======================================"
 
-    if [ $? -eq 0 ]; then
-        echo "✅ Контейнер создан!"
-        
-        echo "🚀 Запускаем контейнер..."
-        pct start $NEW_CTID
-        sleep 10
-        
-        [[ -n "$ROOT_PASSWORD" ]] && set_root_password $NEW_CTID "$ROOT_PASSWORD"
-        
-        [[ "$INSTALL_VNC" =~ ^[Yy]$ ]] && install_vnc_packages $NEW_CTID
-        
-        CONTAINER_IP=$(get_container_ip $NEW_CTID)
-        
-        if [[ "$TELEGRAM_ENABLED" == "y" ]]; then
-            echo "📤 Отправляем отчет в Telegram..."
-            send_telegram_message "$(generate_telegram_report "$NEW_CTID" "$CT_NAME" "$VCPU" "$RAM_GB" "$DISK_SIZE" "$BRIDGE" "$(basename "$TEMPLATE_FILE")" "$ROOT_PASSWORD" "$INSTALL_VNC" "$CONTAINER_IP")"
-        fi
-        
-        echo "🎉 Контейнер успешно создан и запущен!"
-        echo "🆔 CTID: $NEW_CTID | 🏷️ Имя: $CT_NAME | 🌐 IP: $CONTAINER_IP"
-        echo "⚡ vCPU: $VCPU | 💾 RAM: ${RAM_GB}GB | 💿 Диск: ${DISK_SIZE}GB"
-        
+# 1. Выбор шаблона
+select_template
+
+# 2. Ввод имени контейнера
+echo ""
+while true; do
+    read -p "💬 Введите имя контейнера: " CT_NAME
+    if [[ -n "$CT_NAME" && "$CT_NAME" =~ ^[a-zA-Z0-9\-]+$ ]]; then
+        break
     else
-        echo "❌ Ошибка при создании контейнера!"
+        echo "❌ Имя может содержать только латинские буквы, цифры и дефисы"
+    fi
+done
+
+# 3. Настройка параметров контейнера
+echo ""
+echo "⚙️ Настройка параметров контейнера:"
+
+# vCPU
+read -p "💬 Введите количество vCPU [по умолчанию: $DEFAULT_VCPU]: " VCPU
+VCPU=${VCPU:-$DEFAULT_VCPU}
+
+# RAM
+read -p "💬 Введите объем RAM в GB [по умолчанию: $DEFAULT_RAM_GB]: " RAM_GB
+RAM_GB=${RAM_GB:-$DEFAULT_RAM_GB}
+RAM_MB=$((RAM_GB * 1024))
+
+# Диск
+read -p "💬 Введите размер диска в GB [по умолчанию: $DEFAULT_DISK_GB]: " DISK_SIZE
+DISK_SIZE=${DISK_SIZE:-$DEFAULT_DISK_GB}
+
+# Сетевой мост
+get_available_bridges
+read -p "💬 Введите имя сетевого моста [по умолчанию: $DEFAULT_BRIDGE]: " BRIDGE
+BRIDGE=${BRIDGE:-$DEFAULT_BRIDGE}
+
+# Настройка сети
+read -p "💬 Введите IP-адрес в формате CIDR или оставьте пустым для DHCP: " IP_ADDRESS
+if [[ -n "$IP_ADDRESS" ]]; then
+    if [[ "$IP_ADDRESS" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+        read -p "💬 Введите IP-адрес шлюза: " GATEWAY
+        if [[ -z "$GATEWAY" ]]; then
+            echo "❌ Шлюз не может быть пустым"
+            exit 1
+        fi
+        NET_OPTION="name=eth0,bridge=$BRIDGE,ip=$IP_ADDRESS,gw=$GATEWAY"
+    else
+        echo "❌ Неверный формат IP-адреса"
         exit 1
     fi
-}
+else
+    NET_OPTION="name=eth0,bridge=$BRIDGE,ip=dhcp"
+fi
 
-main "$@"
+# VLAN
+read -p "💬 Введите VLAN ID (оставьте пустым если не требуется): " VLAN_ID
+if [[ -n "$VLAN_ID" && "$VLAN_ID" =~ ^[0-9]+$ ]]; then
+    NET_OPTION="${NET_OPTION},tag=$VLAN_ID"
+fi
+
+# 4. Настройка пароля root
+setup_root_password
+
+# 5. Установка VNC
+echo ""
+read -p "💬 Установить базовые пакеты для VNC? (y/n) [n]: " INSTALL_VNC
+INSTALL_VNC=${INSTALL_VNC:-$DEFAULT_INSTALL_VNC}
+
+# 6. Подтверждение параметров
+echo ""
+echo "📋 Параметры контейнера:"
+echo "========================"
+echo "📦 Шаблон: $(basename "$TEMPLATE_FILE")"
+echo "🏷️ Имя: $CT_NAME"
+echo "⚡ vCPU: $VCPU"
+echo "💾 RAM: ${RAM_GB}GB"
+echo "💿 Диск: ${DISK_SIZE}GB"
+echo "🌐 Сеть: $BRIDGE"
+[[ -n "$IP_ADDRESS" ]] && echo "📡 IP-адрес: $IP_ADDRESS"
+[[ -n "$GATEWAY" ]] && echo "🌉 Шлюз: $GATEWAY"
+[[ -n "$VLAN_ID" ]] && echo "🏷️ VLAN: $VLAN_ID"
+echo "🖥️ VNC: $INSTALL_VNC"
+echo "🔐 Пароль: $ROOT_PASSWORD"
+echo ""
+
+read -p "💬 Все параметры верны? (y/n): " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "❌ Создание отменено"
+    exit 1
+fi
+
+# 7. Создание контейнера
+echo ""
+echo "🛠️ Создаем контейнер..."
+
+# Поиск свободного CTID
+NEW_CTID=$(find_available_ctid)
+if [[ $? -ne 0 ]]; then
+    echo "❌ $NEW_CTID"
+    exit 1
+fi
+echo "✅ Выбран CTID: $NEW_CTID"
+
+# Создание контейнера
+if pct create $NEW_CTID "$TEMPLATE_FILE" \
+    --storage "$STORAGE" \
+    --rootfs "${STORAGE}:${DISK_SIZE}" \
+    --hostname "$CT_NAME" \
+    --cores "$VCPU" \
+    --memory "$RAM_MB" \
+    --net0 "$NET_OPTION" \
+    --onboot 1 \
+    --unprivileged 0 \
+    --features nesting=1; then
+    
+    echo "✅ Контейнер создан!"
+else
+    echo "❌ Ошибка при создании контейнера!"
+    exit 1
+fi
+
+# 8. Запуск контейнера
+echo ""
+echo "🚀 Запускаем контейнер..."
+pct start $NEW_CTID
+sleep 10
+
+# Проверяем запуск
+if ! pct status $NEW_CTID | grep -q "running"; then
+    echo "❌ Контейнер не запустился"
+    exit 1
+fi
+echo "✅ Контейнер запущен"
+
+# 9. Установка пароля
+set_root_password $NEW_CTID "$ROOT_PASSWORD"
+
+# 10. Установка VNC (если нужно)
+if [[ "$INSTALL_VNC" =~ ^[Yy]$ ]]; then
+    install_vnc_packages $NEW_CTID
+fi
+
+# 11. Запуск внешнего скрипта (если URL указан)
+EXTERNAL_SCRIPT_STATUS="не выполнялся"
+if [[ -n "$EXTERNAL_SCRIPT_URL" ]]; then
+    echo ""
+    read -p "💬 Запустить скрипт настройки внутри контейнера? (y/n) [n]: " RUN_SCRIPT
+    RUN_SCRIPT=${RUN_SCRIPT:-"n"}
+    
+    if [[ "$RUN_SCRIPT" =~ ^[Yy]$ ]]; then
+        if run_external_script $NEW_CTID; then
+            EXTERNAL_SCRIPT_STATUS="успешно выполнен"
+        else
+            EXTERNAL_SCRIPT_STATUS="завершился с ошибкой"
+        fi
+    else
+        EXTERNAL_SCRIPT_STATUS="пропущен"
+    fi
+else
+    EXTERNAL_SCRIPT_STATUS="URL не указан в конфигурации"
+fi
+
+# 12. Получение IP-адреса
+CONTAINER_IP=$(get_container_ip $NEW_CTID)
+
+# 13. Финальный отчет
+echo ""
+REPORT=$(generate_report "$NEW_CTID" "$CT_NAME" "$VCPU" "$RAM_GB" "$DISK_SIZE" "$BRIDGE" "$(basename "$TEMPLATE_FILE")" "$ROOT_PASSWORD" "$INSTALL_VNC" "$CONTAINER_IP" "$EXTERNAL_SCRIPT_STATUS")
+
+# 14. Отправка в Telegram или вывод в консоль
+if [[ "$TELEGRAM_ENABLED" == "y" ]]; then
+    echo "📤 Отправляем отчет в Telegram..."
+    send_telegram_message "$REPORT"
+else
+    echo "$REPORT"
+fi
+
+echo ""
+echo "✅ Все операции завершены!"

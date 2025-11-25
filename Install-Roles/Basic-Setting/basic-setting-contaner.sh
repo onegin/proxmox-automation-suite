@@ -28,7 +28,7 @@ apt upgrade -y
 
 # Установка пакетов (добавлены locales, rsyslog, net-tools, tzdata, logrotate, screen)
 echo "Установка дополнительных пакетов..."
-apt install -y vim git wget curl mc unrar zip openssh-server htop iftop sudo zabbix-agent locales rsyslog net-tools tzdata logrotate screen
+apt install -y vim git wget curl mc zip openssh-server htop iftop sudo zabbix-agent locales rsyslog net-tools tzdata logrotate screen
 
 # Настройка локали
 echo "Настройка локали..."

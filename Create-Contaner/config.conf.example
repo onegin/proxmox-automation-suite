@@ -41,7 +41,7 @@ DEFAULT_INSTALL_VNC="n"
 # 📱 Настройки Telegram
 
 # Включить уведомления в Telegram (y/n)
-TELEGRAM_ENABLED="y"
+TELEGRAM_ENABLED="n"
 
 # Токен бота Telegram (получить у @BotFather)
 TELEGRAM_BOT_TOKEN="ВАШ_ТОКЕН_БОТА"
@@ -51,6 +51,9 @@ TELEGRAM_CHAT_ID="ВАШ_ID_ЧАТА"
 
 # ======================================================================
 # 🔧 Дополнительные настройки
+
+# URL скрипта для выполнения в контейнере
+EXTERNAL_SCRIPT_URL="https://raw.githubusercontent.com/onegin/proxmox-automation-suite/refs/heads/main/Install-Roles/Basic-Setting/basic-setting-contaner.sh"
 
 # Автозапуск контейнера (1 - включено, 0 - выключено)
 AUTOSTART=1
