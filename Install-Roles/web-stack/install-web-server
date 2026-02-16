@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# helper for docker-compose web stack (nginx+php+mysql+certbot)
+# usage: ./install-web-server --create-site NAME
+
+# project root is two levels above this script
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+COMPOSE_FILE="$(dirname "$0")/docker-compose.yml"
+ENVFILE="$(dirname "$0")/.env"
+
+# load .env
+if [[ -f "$ENVFILE" ]]; then
+    export $(grep -v '^#' "$ENVFILE" | xargs) || true
+fi
+
+ensure_containers() {
+    docker-compose -f "$COMPOSE_FILE" up -d
+}
+
+create_site() {
+    local site="$1"
+    if [[ -z "$site" ]]; then
+        echo "Usage: $0 --create-site NAME" >&2
+        exit 1
+    fi
+
+    local base="$ROOT/app/www/$site"
+    mkdir -p "$base/www" "$base/config"
+
+    cat >"$base/config/nginx.conf" <<'EOF'
+server {
+    listen 80;
+    server_name '$site';
+    root /app/www/$site/www;
+    index index.php index.html;
+
+    location ~ \.php$ {
+        fastcgi_pass php:9000;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name '$site';
+    root /app/www/$site/www;
+    index index.php index.html;
+
+    ssl_certificate /etc/letsencrypt/live/$site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$site/privkey.pem;
+
+    location ~ \.php$ {
+        fastcgi_pass php:9000;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+}
+EOF
+
+    cat >"$base/config/php.ini" <<'EOF'
+; php configuration for $site
+display_errors=On
+EOF
+
+    ensure_containers
+
+    if [[ -z "${MYSQL_ROOT_PASSWORD:-}" ]]; then
+        echo "MYSQL_ROOT_PASSWORD not set in $ENVFILE" >&2
+        exit 1
+    fi
+
+    echo "creating database '$site'..."
+    docker-compose -f "$COMPOSE_FILE" exec mysql \
+        mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS \`$site\`;"
+
+    # attempt to obtain cert
+    echo "requesting certificate for $site (http challenge)"
+    docker-compose -f "$COMPOSE_FILE" run --rm certbot certonly --webroot -w /var/www/certbot \
+        -d "$site" --agree-tos --no-eff-email -m admin@$site
+
+    echo "reloading nginx"
+    docker-compose -f "$COMPOSE_FILE" exec nginx nginx -s reload || true
+
+    echo "site '$site' created at $base"
+}
+
+case "$1" in
+    --create-site)
+        create_site "$2"
+        ;;
+    *)
+        cat <<'USAGE'
+Usage: $(basename "$0") --create-site NAME
+USAGE
+        exit 1
+        ;;
+esac
