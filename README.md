@@ -188,7 +188,7 @@ bash install-web-server --create example.com
 ### Шаг 1: Клонирование репозитория
 
 ```bash
-git clone https://github.com/your-org/proxmox-automation-suite.git
+git clone https://github.com/onegin/proxmox-automation-suite.git
 cd proxmox-automation-suite
 ```
 
@@ -369,8 +369,8 @@ A: Основной фокус на Debian/Ubuntu. Для AlmaLinux/CentOS тр�
 
 Если вы нашли ошибку или у вас есть предложение:
 
-1. Проверьте [существующие issues](https://github.com/your-org/proxmox-automation-suite/issues)
-2. Откройте [новый issue](https://github.com/your-org/proxmox-automation-suite/issues/new) с описанием проблемы
+1. Проверьте [существующие issues](https://github.com/onegin/proxmox-automation-suite/issues)
+2. Откройте [новый issue](https://github.com/onegin/proxmox-automation-suite/issues/new) с описанием проблемы
 3. Приложите логи ошибок и информацию о среде (версия Proxmox, ОС и т.д.)
 
 ### Вклад в код
@@ -398,7 +398,7 @@ A: Основной фокус на Debian/Ubuntu. Для AlmaLinux/CentOS тр�
 ## ✉️ Контакты
 
 - 📧 **Email:** ae@dcea.ru
-- 🐛 **Issues:** [GitHub Issues](https://github.com/your-org/proxmox-automation-suite/issues)
+- 🐛 **Issues:** [GitHub Issues](https://github.com/onegin/proxmox-automation-suite/issues)
 - 📱 **Telegram:** [@antonov_e](https://t.me/antonov_e)
 
 ---
